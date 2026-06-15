@@ -39,7 +39,7 @@ class ReviewSettings:
     "astrbot_plugin_appreview",
     "qiqi, lishining",
     "一个可以通过关键词来同意或拒绝进入群聊的插件",
-    "1.4.0",
+    "1.4.2",
 )
 class AppReviewPlugin(Star):
     def __init__(self, context: Context, config: Mapping[str, Any] | None = None):
@@ -71,7 +71,7 @@ class AppReviewPlugin(Star):
         value = self._config_value(section_config, key, [])
         if not isinstance(value, list):
             return []
-        return [str(item) for item in value if str(item)]
+        return [keyword for item in value if (keyword := str(item).strip())]
 
     def _settings_from_config(self, section_config: Mapping[str, Any]) -> ReviewSettings:
         return ReviewSettings(

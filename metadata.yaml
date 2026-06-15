@@ -1,6 +1,6 @@
 name: astrbot_plugin_appreview
 desc: 这是一个可以通过关键词来同意或拒绝进入群聊的插件。
 help: 群聊申请审核插件可以通过关键词自动处理群聊申请。配置项行查看astrbot插件配置页面
-version: v1.4.0
+version: v1.4.2
 author: qiqi, lishining
 repo: https://github.com/13686664257cz/astrbot_plugin_appreview

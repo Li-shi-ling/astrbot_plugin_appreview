@@ -68,10 +68,22 @@ def test_plugin_extracts_runtime_config_values():
 
 
 def test_non_list_keyword_config_is_ignored():
-    plugin = make_plugin({"global_review": {"accept_keywords": "通过", "reject_keywords": "拒绝"}})
+    plugin = make_plugin(
+        {"global_review": {"accept_keywords": "通过", "reject_keywords": "拒绝"}}
+    )
 
     assert plugin.review_settings.accept_keywords == []
     assert plugin.review_settings.reject_keywords == []
+
+
+def test_blank_keyword_items_are_ignored():
+    plugin = make_plugin(
+        {"global_review": {"accept_keywords": ["", "   "], "reject_keywords": ["\n"]}}
+    )
+
+    assert plugin.review_settings.accept_keywords == []
+    assert plugin.review_settings.reject_keywords == []
+    assert plugin.decide_review("任何内容") is None
 
 
 def test_group_rule_overrides_global_rule():
@@ -164,6 +176,26 @@ def test_accept_keyword_approves_request():
     assert decision.matched_keyword == "三连了"
 
 
+def test_accept_keywords_without_reject_keywords_never_reject():
+    plugin = make_plugin(
+        {
+            "global_review": {
+                "accept_keywords": ["三连了"],
+                "reject_keywords": [],
+                "auto_accept": False,
+                "auto_reject": False,
+            }
+        }
+    )
+
+    accepted = plugin.decide_review("我已经三连了")
+    unmatched = plugin.decide_review("普通申请")
+
+    assert accepted is not None
+    assert accepted.approve is True
+    assert unmatched is None
+
+
 def test_unmatched_comment_waits_for_manual_review():
     plugin = make_plugin()
 
@@ -206,6 +238,37 @@ async def test_handle_group_join_request_skips_unmatched_comment():
             "user_id": 10001,
             "group_id": 20002,
             "comment": "你好",
+        },
+        call_action=call_action,
+    )
+
+    await plugin.handle_group_join_request(event)
+
+    call_action.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_group_join_request_skips_when_keyword_lists_are_empty():
+    plugin = make_plugin(
+        {
+            "global_review": {
+                "accept_keywords": [],
+                "reject_keywords": [],
+                "auto_accept": False,
+                "auto_reject": False,
+            }
+        }
+    )
+    call_action = AsyncMock()
+    event = make_event(
+        {
+            "post_type": "request",
+            "request_type": "group",
+            "sub_type": "add",
+            "flag": "flag-1",
+            "user_id": 10001,
+            "group_id": 20002,
+            "comment": "三连了",
         },
         call_action=call_action,
     )
