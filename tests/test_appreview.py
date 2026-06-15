@@ -31,6 +31,47 @@ def make_event(raw_message=None, call_action=None):
     return SimpleNamespace(bot=bot, message_obj=message_obj)
 
 
+def test_plugin_uses_astrbot_config_without_local_defaults():
+    plugin = make_plugin()
+
+    assert plugin.config == {}
+    assert plugin.accept_keywords == []
+    assert plugin.reject_keywords == []
+    assert plugin.auto_accept is False
+    assert plugin.auto_reject is False
+    assert plugin.reject_reason == ""
+    assert plugin.delay_seconds == 0
+    assert plugin.decide_review("三连了") is None
+
+
+def test_plugin_extracts_runtime_config_values():
+    config = {
+        "accept_keywords": ["通过", ""],
+        "reject_keywords": ["拒绝"],
+        "auto_accept": False,
+        "auto_reject": True,
+        "reject_reason": "不符合要求",
+        "delay_seconds": 3,
+    }
+
+    plugin = make_plugin(config)
+
+    assert plugin.config is config
+    assert plugin.accept_keywords == ["通过"]
+    assert plugin.reject_keywords == ["拒绝"]
+    assert plugin.auto_accept is False
+    assert plugin.auto_reject is True
+    assert plugin.reject_reason == "不符合要求"
+    assert plugin.delay_seconds == 3
+
+
+def test_non_list_keyword_config_is_ignored():
+    plugin = make_plugin({"accept_keywords": "通过", "reject_keywords": "拒绝"})
+
+    assert plugin.accept_keywords == []
+    assert plugin.reject_keywords == []
+
+
 def test_group_add_request_filter_matches_add_request():
     event = make_event(
         {

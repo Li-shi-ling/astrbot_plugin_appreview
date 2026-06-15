@@ -58,6 +58,7 @@
 5. 未命中任何规则时不处理，保留为手动审核。
 
 当前版本通过新版 AstrBot `HandlerFilter` 注册加群申请过滤器，并使用 `event.bot.api.call_action("set_group_add_request", ...)` 调用 OneBot 审核接口。
+运行时配置直接使用 AstrBot 传入的插件配置对象，并在初始化时解析为审核所需的实例属性。
 
 ## 作者
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,42 +29,36 @@ class ReviewDecision:
     "astrbot_plugin_appreview",
     "qiqi, lishining",
     "一个可以通过关键词来同意或拒绝进入群聊的插件",
-    "1.3.1",
+    "1.3.3",
 )
 class AppReviewPlugin(Star):
-    def __init__(self, context: Context, config: dict[str, Any] | None = None):
+    def __init__(self, context: Context, config: Mapping[str, Any] | None = None):
         super().__init__(context)
-        self.config = self._default_config()
-        if config:
-            self._merge_config(config)
-        else:
-            self.load_config()
+        self.config = config if config is not None else self._load_config()
+        self.accept_keywords = self._config_keywords("accept_keywords")
+        self.reject_keywords = self._config_keywords("reject_keywords")
+        self.auto_accept = bool(self._config_value("auto_accept", False))
+        self.auto_reject = bool(self._config_value("auto_reject", False))
+        self.reject_reason = str(self._config_value("reject_reason", ""))
+        self.delay_seconds = max(0, int(self._config_value("delay_seconds", 0) or 0))
         logger.info("群聊申请审核插件配置加载成功: %s", self.config)
 
-    @staticmethod
-    def _default_config() -> dict[str, Any]:
-        return {
-            "accept_keywords": ["给了", "一键三连了", "三连了"],
-            "reject_keywords": ["拒绝", "不同意", "reject", "deny"],
-            "auto_accept": False,
-            "auto_reject": False,
-            "reject_reason": "申请被拒绝",
-            "delay_seconds": 0,
-        }
-
-    def _merge_config(self, user_config: dict[str, Any]) -> None:
-        for key, value in user_config.items():
-            if key in self.config:
-                self.config[key] = value
-
-    def load_config(self) -> None:
-        """加载插件配置。"""
+    def _load_config(self) -> Mapping[str, Any]:
+        """加载 AstrBot 提供的插件配置。"""
         try:
-            user_config = self.context.get_config()
-            if user_config:
-                self._merge_config(user_config)
+            return self.context.get_config() or {}
         except Exception as exc:
             logger.error("群聊申请审核插件配置加载失败: %s", exc)
+            return {}
+
+    def _config_value(self, key: str, default: Any) -> Any:
+        return self.config.get(key, default)
+
+    def _config_keywords(self, key: str) -> list[str]:
+        value = self._config_value(key, [])
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if str(item)]
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @register_group_add_request()
@@ -91,16 +86,15 @@ class AppReviewPlugin(Star):
             )
             return
 
-        delay_seconds = max(0, int(self.config.get("delay_seconds", 0) or 0))
-        if delay_seconds > 0:
+        if self.delay_seconds > 0:
             logger.info(
                 "将在 %s 秒后%s用户 %s 加入群 %s 的请求",
-                delay_seconds,
+                self.delay_seconds,
                 "同意" if decision.approve else "拒绝",
                 user_id,
                 group_id,
             )
-            await asyncio.sleep(delay_seconds)
+            await asyncio.sleep(self.delay_seconds)
 
         ok = await self.approve_request(
             event,
@@ -130,34 +124,26 @@ class AppReviewPlugin(Star):
 
     def decide_review(self, comment: str) -> ReviewDecision | None:
         """根据配置和申请验证信息生成审核决策。"""
-        reject_reason = str(self.config.get("reject_reason", ""))
-
-        if self.config.get("auto_accept"):
+        if self.auto_accept:
             return ReviewDecision(approve=True)
 
-        if self.config.get("auto_reject"):
-            return ReviewDecision(approve=False, reason=reject_reason)
+        if self.auto_reject:
+            return ReviewDecision(approve=False, reason=self.reject_reason)
 
         normalized_comment = comment.lower()
-        for keyword in self._configured_keywords("reject_keywords"):
+        for keyword in self.reject_keywords:
             if keyword.lower() in normalized_comment:
                 return ReviewDecision(
                     approve=False,
-                    reason=reject_reason,
+                    reason=self.reject_reason,
                     matched_keyword=keyword,
                 )
 
-        for keyword in self._configured_keywords("accept_keywords"):
+        for keyword in self.accept_keywords:
             if keyword.lower() in normalized_comment:
                 return ReviewDecision(approve=True, matched_keyword=keyword)
 
         return None
-
-    def _configured_keywords(self, key: str) -> list[str]:
-        value = self.config.get(key, [])
-        if not isinstance(value, list):
-            return []
-        return [str(item) for item in value if str(item)]
 
     async def approve_request(
         self,

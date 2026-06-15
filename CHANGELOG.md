@@ -1,5 +1,13 @@
 # 更新日志
 
+## v1.3.3
+
+- 参考 `astrbot_plugin_util` 的配置处理方式，直接保存 AstrBot 配置对象并解析为实例属性。
+
+## v1.3.2
+
+- 移除代码内 `_default_config()`，默认配置交由 AstrBot 插件配置系统处理。
+
 ## v1.3.1
 
 - 添加 lishining 为第二作者。
