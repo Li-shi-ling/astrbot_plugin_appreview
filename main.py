@@ -1,205 +1,214 @@
-from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star, register
-from astrbot.api import logger
-from typing import Optional
+from __future__ import annotations
+
 import asyncio
+from dataclasses import dataclass
+from typing import Any
+
+from astrbot.api import logger
+from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.star import Context, Star, register
+from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
+    AiocqhttpMessageEvent,
+)
+
+try:
+    from .core.Filter import register_group_add_request
+except ImportError:
+    from core.Filter import register_group_add_request
 
 
-class ApifoxModel:
-    def __init__(self, approve: bool, flag: str, reason: Optional[str] = None) -> None:
-        self.approve = approve
-        self.flag = flag
-        self.reason = reason
+@dataclass(slots=True)
+class ReviewDecision:
+    approve: bool
+    reason: str = ""
+    matched_keyword: str = ""
 
-@register("astrbot_plugin_appreview", "qiqi", "一个可以通过关键词来同意或拒绝进入群聊的插件", "1.2.0")
+
+@register(
+    "astrbot_plugin_appreview",
+    "qiqi, lishining",
+    "一个可以通过关键词来同意或拒绝进入群聊的插件",
+    "1.3.1",
+)
 class AppReviewPlugin(Star):
-    def __init__(self, context: Context, config=None):
+    def __init__(self, context: Context, config: dict[str, Any] | None = None):
         super().__init__(context)
-        # 默认配置
-        self.config = {
+        self.config = self._default_config()
+        if config:
+            self._merge_config(config)
+        else:
+            self.load_config()
+        logger.info("群聊申请审核插件配置加载成功: %s", self.config)
+
+    @staticmethod
+    def _default_config() -> dict[str, Any]:
+        return {
             "accept_keywords": ["给了", "一键三连了", "三连了"],
             "reject_keywords": ["拒绝", "不同意", "reject", "deny"],
-            "auto_accept": False,  # 是否自动同意所有申请
-            "auto_reject": False,  # 是否自动拒绝所有申请
-            "reject_reason": "申请被拒绝",  # 拒绝理由
-            "delay_seconds": 0  # 延迟处理时间（秒）
+            "auto_accept": False,
+            "auto_reject": False,
+            "reject_reason": "申请被拒绝",
+            "delay_seconds": 0,
         }
-        
-        # 如果传入了配置，则使用传入的配置
-        if config:
-            for key, value in config.items():
-                if key in self.config:
-                    self.config[key] = value
-            logger.info(f"群聊申请审核插件配置加载成功: {self.config}")
-        else:
-            # 否则从context加载配置
-            self.load_config()
-        
-        # Monkey patch AstrBotMessage类，确保所有实例都有session_id属性
-        from astrbot.core.platform.astrbot_message import AstrBotMessage
-        original_init = AstrBotMessage.__init__
-        
-        def patched_init(self, *args, **kwargs):
-            original_init(self, *args, **kwargs)
-            if not hasattr(self, "session_id") or not self.session_id:
-                self.session_id = "unknown_session"
-        
-        # 应用monkey patch
-        AstrBotMessage.__init__ = patched_init
-        logger.info("已应用AstrBotMessage的monkey patch，确保session_id属性存在")
-    
-    def load_config(self):
-        """加载配置"""
+
+    def _merge_config(self, user_config: dict[str, Any]) -> None:
+        for key, value in user_config.items():
+            if key in self.config:
+                self.config[key] = value
+
+    def load_config(self) -> None:
+        """加载插件配置。"""
         try:
             user_config = self.context.get_config()
             if user_config:
-                for key, value in user_config.items():
-                    if key in self.config:
-                        self.config[key] = value
-            logger.info(f"群聊申请审核插件配置加载成功: {self.config}")
-        except Exception as e:
-            logger.error(f"群聊申请审核插件配置加载失败: {e}")
-    
-    def set_session_id(self, event):
-        """设置session_id属性"""
-        if not hasattr(event, "message_obj") or not hasattr(event.message_obj, "raw_message"):
+                self._merge_config(user_config)
+        except Exception as exc:
+            logger.error("群聊申请审核插件配置加载失败: %s", exc)
+
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    @register_group_add_request()
+    async def handle_group_join_request(self, event: AiocqhttpMessageEvent) -> None:
+        """处理 OneBot 加群申请事件。"""
+        request_data = self._raw_request_data(event)
+        flag = str(request_data.get("flag", ""))
+        user_id = str(request_data.get("user_id", ""))
+        group_id = str(request_data.get("group_id", ""))
+        comment = str(request_data.get("comment", ""))
+
+        logger.info(
+            "收到加群请求: 用户ID=%s, 群ID=%s, 验证信息=%s",
+            user_id,
+            group_id,
+            comment,
+        )
+
+        decision = self.decide_review(comment)
+        if decision is None:
+            logger.info(
+                "用户 %s 加入群 %s 的请求未匹配到自动审核规则，等待手动审核",
+                user_id,
+                group_id,
+            )
             return
-            
-        raw_message = event.message_obj.raw_message
-        if not isinstance(raw_message, dict):
+
+        delay_seconds = max(0, int(self.config.get("delay_seconds", 0) or 0))
+        if delay_seconds > 0:
+            logger.info(
+                "将在 %s 秒后%s用户 %s 加入群 %s 的请求",
+                delay_seconds,
+                "同意" if decision.approve else "拒绝",
+                user_id,
+                group_id,
+            )
+            await asyncio.sleep(delay_seconds)
+
+        ok = await self.approve_request(
+            event,
+            flag=flag,
+            approve=decision.approve,
+            reason=decision.reason,
+        )
+        if not ok:
+            logger.warning("处理用户 %s 加入群 %s 的请求失败", user_id, group_id)
             return
-            
-        # 如果没有session_id属性，则根据请求类型添加
-        if not hasattr(event.message_obj, "session_id") or not event.message_obj.session_id:
-            if "group_id" in raw_message and raw_message["group_id"]:
-                event.message_obj.session_id = str(raw_message["group_id"])
-            elif "user_id" in raw_message and raw_message["user_id"]:
-                event.message_obj.session_id = str(raw_message["user_id"])
-            else:
-                # 如果无法确定session_id，使用一个默认值
-                event.message_obj.session_id = "unknown_session"
-    
-    @filter.event_message_type(filter.EventMessageType.ALL)
-    async def handle_group_request(self, event: AstrMessageEvent):
-        """处理群聊申请事件"""
-        # 检查是否为请求事件
-        if not hasattr(event, "message_obj") or not hasattr(event.message_obj, "raw_message"):
-            return
-            
-        raw_message = event.message_obj.raw_message
-        if not raw_message or not isinstance(raw_message, dict):
-            return
-        
-        # 检查是否为群组请求事件
-        if raw_message.get("post_type") != "request":
-            return
-        
-        # 确保message_obj有session_id属性
-        self.set_session_id(event)
-        
-        # 处理加群请求
-        if raw_message.get("request_type") == "group" and raw_message.get("sub_type") == "add":
-            await self.process_group_join_request(event, raw_message)
-    
-    async def process_group_join_request(self, event: AstrMessageEvent, request_data):
-        """处理加群请求"""
-        flag = request_data.get("flag", "")
-        user_id = request_data.get("user_id", "")
-        comment = request_data.get("comment", "")
-        group_id = request_data.get("group_id", "")
-        
-        logger.info(f"收到加群请求: 用户ID={user_id}, 群ID={group_id}, 验证信息={comment}")
-        
-        # 获取延迟时间
-        delay_seconds = self.config.get("delay_seconds", 0)
-        
-        # 自动处理逻辑
-        if self.config["auto_accept"]:
-            if delay_seconds > 0:
-                logger.info(f"将在 {delay_seconds} 秒后自动同意用户 {user_id} 加入群 {group_id} 的请求")
-                await asyncio.sleep(delay_seconds)
-            await self.approve_request(event, flag, True)
-            logger.info(f"自动同意用户 {user_id} 加入群 {group_id} 的请求")
-            return
-        
-        if self.config["auto_reject"]:
-            if delay_seconds > 0:
-                logger.info(f"将在 {delay_seconds} 秒后自动拒绝用户 {user_id} 加入群 {group_id} 的请求")
-                await asyncio.sleep(delay_seconds)
-            await self.approve_request(event, flag, False, self.config["reject_reason"])
-            logger.info(f"自动拒绝用户 {user_id} 加入群 {group_id} 的请求")
-            return
-        
-        # 根据关键词处理，优先检查拒绝关键词
-        # 先检查是否包含拒绝关键词
-        for keyword in self.config["reject_keywords"]:
-            if keyword.lower() in comment.lower():
-                if delay_seconds > 0:
-                    logger.info(f"将在 {delay_seconds} 秒后根据关键词 '{keyword}' 拒绝用户 {user_id} 加入群 {group_id} 的请求")
-                    await asyncio.sleep(delay_seconds)
-                await self.approve_request(event, flag, False, self.config["reject_reason"])
-                logger.info(f"根据关键词 '{keyword}' 拒绝用户 {user_id} 加入群 {group_id} 的请求")
-                return
-        
-        # 再检查是否包含接受关键词
-        for keyword in self.config["accept_keywords"]:
-            if keyword.lower() in comment.lower():
-                if delay_seconds > 0:
-                    logger.info(f"将在 {delay_seconds} 秒后根据关键词 '{keyword}' 同意用户 {user_id} 加入群 {group_id} 的请求")
-                    await asyncio.sleep(delay_seconds)
-                await self.approve_request(event, flag, True)
-                logger.info(f"根据关键词 '{keyword}' 同意用户 {user_id} 加入群 {group_id} 的请求")
-                return
-        
-        # 如果没有匹配到关键词，不做任何处理，等待手动审核
-        logger.info(f"用户 {user_id} 加入群 {group_id} 的请求未匹配到关键词，等待手动审核")
-        return
-    
-    async def approve_request(self, event: AstrMessageEvent, flag, approve=True, reason=""):
-        """同意或拒绝请求"""
+
+        if decision.matched_keyword:
+            logger.info(
+                "根据关键词 '%s' %s用户 %s 加入群 %s 的请求",
+                decision.matched_keyword,
+                "同意" if decision.approve else "拒绝",
+                user_id,
+                group_id,
+            )
+        else:
+            logger.info(
+                "自动%s用户 %s 加入群 %s 的请求",
+                "同意" if decision.approve else "拒绝",
+                user_id,
+                group_id,
+            )
+
+    def decide_review(self, comment: str) -> ReviewDecision | None:
+        """根据配置和申请验证信息生成审核决策。"""
+        reject_reason = str(self.config.get("reject_reason", ""))
+
+        if self.config.get("auto_accept"):
+            return ReviewDecision(approve=True)
+
+        if self.config.get("auto_reject"):
+            return ReviewDecision(approve=False, reason=reject_reason)
+
+        normalized_comment = comment.lower()
+        for keyword in self._configured_keywords("reject_keywords"):
+            if keyword.lower() in normalized_comment:
+                return ReviewDecision(
+                    approve=False,
+                    reason=reject_reason,
+                    matched_keyword=keyword,
+                )
+
+        for keyword in self._configured_keywords("accept_keywords"):
+            if keyword.lower() in normalized_comment:
+                return ReviewDecision(approve=True, matched_keyword=keyword)
+
+        return None
+
+    def _configured_keywords(self, key: str) -> list[str]:
+        value = self.config.get(key, [])
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if str(item)]
+
+    async def approve_request(
+        self,
+        event: AstrMessageEvent,
+        flag: str,
+        approve: bool = True,
+        reason: str = "",
+    ) -> bool:
+        """调用 OneBot API 同意或拒绝加群申请。"""
+        if not flag:
+            logger.warning("加群申请缺少 flag，无法处理")
+            return False
+
+        call_action = self._resolve_call_action(event)
+        if call_action is None:
+            logger.warning("当前事件不支持 OneBot call_action，无法处理加群申请")
+            return False
+
+        payload = {
+            "flag": flag,
+            "sub_type": "add",
+            "approve": approve,
+            "reason": reason if reason else "",
+        }
+
         try:
-            # 确保message_obj有session_id属性
-            self.set_session_id(event)
-            
-            # 检查是否为aiocqhttp平台
-            if event.get_platform_name() == "aiocqhttp":
-                # 使用NapCat API格式
-                from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-                assert isinstance(event, AiocqhttpMessageEvent)
-                client = event.bot
-                
-                # 创建ApifoxModel实例
-                api_model = ApifoxModel(
-                    approve=approve,
-                    flag=flag,
-                    reason=reason
-                )
-                
-                # 调用NapCat API
-                payloads = {
-                    "flag": api_model.flag,
-                    "sub_type": "add",
-                    "approve": api_model.approve,
-                    "reason": api_model.reason if api_model.reason else ""
-                }
-                
-                await client.call_action('set_group_add_request', **payloads)
-                return True
-            # 兼容其他平台的处理方式
-            elif event.bot and hasattr(event.bot, "call_action"):
-                await event.bot.call_action(
-                    "set_group_add_request",
-                    flag=flag,
-                    sub_type="add",
-                    approve=approve,
-                    reason=reason
-                )
-                return True
+            await call_action("set_group_add_request", **payload)
+            return True
+        except Exception as exc:
+            logger.error("处理群聊申请失败: %s", exc)
             return False
-        except Exception as e:
-            logger.error(f"处理群聊申请失败: {e}")
-            return False
-    
-    async def terminate(self):
-        """插件被卸载/停用时调用"""
+
+    @staticmethod
+    def _resolve_call_action(event: AstrMessageEvent):
+        bot = getattr(event, "bot", None)
+        api = getattr(bot, "api", None)
+        call_action = getattr(api, "call_action", None)
+        if callable(call_action):
+            return call_action
+        call_action = getattr(bot, "call_action", None)
+        if callable(call_action):
+            return call_action
+        return None
+
+    @staticmethod
+    def _raw_request_data(event: AstrMessageEvent) -> dict[str, Any]:
+        raw_message = getattr(event.message_obj, "raw_message", None)
+        if isinstance(raw_message, dict):
+            return raw_message
+        return {}
+
+    async def terminate(self) -> None:
+        """插件被卸载或停用时调用。"""
         logger.info("群聊申请审核插件已停用")

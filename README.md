@@ -9,6 +9,7 @@
 - 支持手动审核群聊申请
 - 可配置的关键词和拒绝理由
 - 支持延迟处理群聊申请
+- 适配新版 AstrBot 事件过滤器注册方式，仅处理 aiocqhttp/OneBot 加群申请事件
 
 ## 使用方法
 
@@ -45,6 +46,23 @@
    例如：申请被拒绝，请联系管理员
 
 6. 自动处理延迟时间：自动处理申请的延迟时间，单位为秒
+
+## 审核逻辑
+
+插件只处理 `request_type=group` 且 `sub_type=add` 的加群申请事件。自动审核优先级如下：
+
+1. 开启 `auto_accept` 时，所有申请都会自动同意。
+2. 开启 `auto_reject` 时，所有申请都会自动拒绝。
+3. 申请验证信息命中 `reject_keywords` 时自动拒绝。
+4. 申请验证信息命中 `accept_keywords` 时自动同意。
+5. 未命中任何规则时不处理，保留为手动审核。
+
+当前版本通过新版 AstrBot `HandlerFilter` 注册加群申请过滤器，并使用 `event.bot.api.call_action("set_group_add_request", ...)` 调用 OneBot 审核接口。
+
+## 作者
+
+- qiqi
+- lishining
 
 ## 支持
 
