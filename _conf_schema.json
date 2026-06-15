@@ -1,46 +1,134 @@
 {
-  "accept_keywords": {
-    "type": "list",
-    "title": "自动同意关键词",
-    "description": "当申请消息中包含这些关键词时，将自动同意申请",
-    "default": ["给了", "一键三连了", "三连了"],
+  "global_review": {
+    "type": "object",
+    "description": "全局审核规则",
+    "hint": "未命中分群规则时使用这一组配置。",
     "items": {
-      "type": "string"
+      "accept_keywords": {
+        "type": "list",
+        "description": "自动同意关键词",
+        "hint": "申请验证信息包含任一关键词时自动同意。",
+        "default": [
+          "给了",
+          "一键三连了",
+          "三连了"
+        ],
+        "items": {
+          "type": "string"
+        }
+      },
+      "reject_keywords": {
+        "type": "list",
+        "description": "自动拒绝关键词",
+        "hint": "申请验证信息包含任一关键词时自动拒绝，优先级高于同意关键词。",
+        "default": [
+          "拒绝",
+          "不同意",
+          "reject",
+          "deny"
+        ],
+        "items": {
+          "type": "string"
+        }
+      },
+      "auto_accept": {
+        "type": "bool",
+        "description": "自动同意所有申请",
+        "hint": "开启后该规则范围内所有入群申请都会自动同意，优先级最高。",
+        "default": false
+      },
+      "auto_reject": {
+        "type": "bool",
+        "description": "自动拒绝所有申请",
+        "hint": "开启后该规则范围内所有入群申请都会自动拒绝，优先级低于自动同意但高于关键词。",
+        "default": false
+      },
+      "reject_reason": {
+        "type": "string",
+        "description": "默认拒绝理由",
+        "hint": "自动拒绝申请时传给 OneBot 的拒绝理由。",
+        "default": "申请被拒绝"
+      },
+      "delay_seconds": {
+        "type": "int",
+        "description": "延迟处理时间",
+        "hint": "处理入群申请前等待的秒数，设置为 0 表示不延迟。",
+        "default": 0,
+        "slider": {
+          "min": 0,
+          "max": 300,
+          "step": 1
+        }
+      }
     }
   },
-  "reject_keywords": {
-    "type": "list",
-    "title": "自动拒绝关键词",
-    "description": "当申请消息中包含这些关键词时，将自动拒绝申请",
-    "default": ["拒绝", "不同意", "reject", "deny"],
-    "items": {
-      "type": "string"
+  "group_review_rules": {
+    "type": "template_list",
+    "description": "分群审核规则",
+    "hint": "为指定群号配置独立审核规则；群号命中时优先使用这里的配置。",
+    "default": [],
+    "templates": {
+      "group_rule": {
+        "name": "群审核规则",
+        "hint": "给一个群单独配置自动审核关键词、自动同意/拒绝和延迟处理。",
+        "display_item": "group_id",
+        "hide_hint_in_list": true,
+        "items": {
+          "group_id": {
+            "type": "string",
+            "description": "群号",
+            "hint": "填写 QQ 群号，例如 123456789。",
+            "default": ""
+          },
+          "accept_keywords": {
+            "type": "list",
+            "description": "自动同意关键词",
+            "hint": "该群申请验证信息包含任一关键词时自动同意。",
+            "default": [],
+            "items": {
+              "type": "string"
+            }
+          },
+          "reject_keywords": {
+            "type": "list",
+            "description": "自动拒绝关键词",
+            "hint": "该群申请验证信息包含任一关键词时自动拒绝，优先级高于同意关键词。",
+            "default": [],
+            "items": {
+              "type": "string"
+            }
+          },
+          "auto_accept": {
+            "type": "bool",
+            "description": "自动同意所有申请",
+            "hint": "开启后该群所有入群申请都会自动同意，优先级最高。",
+            "default": false
+          },
+          "auto_reject": {
+            "type": "bool",
+            "description": "自动拒绝所有申请",
+            "hint": "开启后该群所有入群申请都会自动拒绝，优先级低于自动同意但高于关键词。",
+            "default": false
+          },
+          "reject_reason": {
+            "type": "string",
+            "description": "默认拒绝理由",
+            "hint": "该群自动拒绝申请时使用的理由。",
+            "default": "申请被拒绝"
+          },
+          "delay_seconds": {
+            "type": "int",
+            "description": "延迟处理时间",
+            "hint": "该群处理入群申请前等待的秒数，设置为 0 表示不延迟。",
+            "default": 0,
+            "slider": {
+              "min": 0,
+              "max": 300,
+              "step": 1
+            }
+          }
+        }
+      }
     }
-  },
-  "auto_accept": {
-    "type": "bool",
-    "title": "自动同意所有申请",
-    "description": "启用后将自动同意所有入群申请，优先级高于关键词",
-    "default": false
-  },
-  "auto_reject": {
-    "type": "bool",
-    "title": "自动拒绝所有申请",
-    "description": "启用后将自动拒绝所有入群申请，优先级低于自动同意但高于关键词",
-    "default": false
-  },
-  "reject_reason": {
-    "type": "string",
-    "title": "默认拒绝理由",
-    "description": "自动拒绝申请时使用的理由",
-    "default": "申请被拒绝"
-  },
-  "delay_seconds": {
-    "type": "int",
-    "title": "延迟处理时间",
-    "description": "处理入群申请前等待的时间（秒），设置为0表示不延迟",
-    "default": 0,
-    "min": 0,
-    "max": 300
   }
 }

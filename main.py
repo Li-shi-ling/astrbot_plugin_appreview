@@ -25,22 +25,29 @@ class ReviewDecision:
     matched_keyword: str = ""
 
 
+@dataclass(slots=True)
+class ReviewSettings:
+    accept_keywords: list[str]
+    reject_keywords: list[str]
+    auto_accept: bool
+    auto_reject: bool
+    reject_reason: str
+    delay_seconds: int
+
+
 @register(
     "astrbot_plugin_appreview",
     "qiqi, lishining",
     "一个可以通过关键词来同意或拒绝进入群聊的插件",
-    "1.3.3",
+    "1.4.0",
 )
 class AppReviewPlugin(Star):
     def __init__(self, context: Context, config: Mapping[str, Any] | None = None):
         super().__init__(context)
         self.config = config if config is not None else self._load_config()
-        self.accept_keywords = self._config_keywords("accept_keywords")
-        self.reject_keywords = self._config_keywords("reject_keywords")
-        self.auto_accept = bool(self._config_value("auto_accept", False))
-        self.auto_reject = bool(self._config_value("auto_reject", False))
-        self.reject_reason = str(self._config_value("reject_reason", ""))
-        self.delay_seconds = max(0, int(self._config_value("delay_seconds", 0) or 0))
+        global_config = self._config_section("global_review")
+        self.review_settings = self._settings_from_config(global_config)
+        self.group_review_settings = self._load_group_review_settings()
         logger.info("群聊申请审核插件配置加载成功: %s", self.config)
 
     def _load_config(self) -> Mapping[str, Any]:
@@ -51,14 +58,51 @@ class AppReviewPlugin(Star):
             logger.error("群聊申请审核插件配置加载失败: %s", exc)
             return {}
 
-    def _config_value(self, key: str, default: Any) -> Any:
+    def _config_section(self, key: str) -> dict[str, Any]:
+        value = self.config.get(key, {})
+        return dict(value) if isinstance(value, Mapping) else {}
+
+    def _config_value(self, section_config: Mapping[str, Any], key: str, default: Any) -> Any:
+        if key in section_config:
+            return section_config.get(key, default)
         return self.config.get(key, default)
 
-    def _config_keywords(self, key: str) -> list[str]:
-        value = self._config_value(key, [])
+    def _config_keywords(self, section_config: Mapping[str, Any], key: str) -> list[str]:
+        value = self._config_value(section_config, key, [])
         if not isinstance(value, list):
             return []
         return [str(item) for item in value if str(item)]
+
+    def _settings_from_config(self, section_config: Mapping[str, Any]) -> ReviewSettings:
+        return ReviewSettings(
+            accept_keywords=self._config_keywords(section_config, "accept_keywords"),
+            reject_keywords=self._config_keywords(section_config, "reject_keywords"),
+            auto_accept=bool(self._config_value(section_config, "auto_accept", False)),
+            auto_reject=bool(self._config_value(section_config, "auto_reject", False)),
+            reject_reason=str(self._config_value(section_config, "reject_reason", "")),
+            delay_seconds=max(
+                0,
+                int(self._config_value(section_config, "delay_seconds", 0) or 0),
+            ),
+        )
+
+    def _load_group_review_settings(self) -> dict[str, ReviewSettings]:
+        raw_rules = self.config.get("group_review_rules", [])
+        if not isinstance(raw_rules, list):
+            return {}
+
+        rules: dict[str, ReviewSettings] = {}
+        for raw_rule in raw_rules:
+            if not isinstance(raw_rule, Mapping):
+                continue
+            group_id = str(raw_rule.get("group_id", "")).strip()
+            if not group_id:
+                continue
+            rules[group_id] = self._settings_from_config(raw_rule)
+        return rules
+
+    def settings_for_group(self, group_id: str) -> ReviewSettings:
+        return self.group_review_settings.get(str(group_id), self.review_settings)
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @register_group_add_request()
@@ -77,7 +121,8 @@ class AppReviewPlugin(Star):
             comment,
         )
 
-        decision = self.decide_review(comment)
+        settings = self.settings_for_group(group_id)
+        decision = self.decide_review(comment, settings)
         if decision is None:
             logger.info(
                 "用户 %s 加入群 %s 的请求未匹配到自动审核规则，等待手动审核",
@@ -86,15 +131,15 @@ class AppReviewPlugin(Star):
             )
             return
 
-        if self.delay_seconds > 0:
+        if settings.delay_seconds > 0:
             logger.info(
                 "将在 %s 秒后%s用户 %s 加入群 %s 的请求",
-                self.delay_seconds,
+                settings.delay_seconds,
                 "同意" if decision.approve else "拒绝",
                 user_id,
                 group_id,
             )
-            await asyncio.sleep(self.delay_seconds)
+            await asyncio.sleep(settings.delay_seconds)
 
         ok = await self.approve_request(
             event,
@@ -122,24 +167,30 @@ class AppReviewPlugin(Star):
                 group_id,
             )
 
-    def decide_review(self, comment: str) -> ReviewDecision | None:
+    def decide_review(
+        self,
+        comment: str,
+        settings: ReviewSettings | None = None,
+    ) -> ReviewDecision | None:
         """根据配置和申请验证信息生成审核决策。"""
-        if self.auto_accept:
+        settings = settings or self.review_settings
+
+        if settings.auto_accept:
             return ReviewDecision(approve=True)
 
-        if self.auto_reject:
-            return ReviewDecision(approve=False, reason=self.reject_reason)
+        if settings.auto_reject:
+            return ReviewDecision(approve=False, reason=settings.reject_reason)
 
         normalized_comment = comment.lower()
-        for keyword in self.reject_keywords:
+        for keyword in settings.reject_keywords:
             if keyword.lower() in normalized_comment:
                 return ReviewDecision(
                     approve=False,
-                    reason=self.reject_reason,
+                    reason=settings.reject_reason,
                     matched_keyword=keyword,
                 )
 
-        for keyword in self.accept_keywords:
+        for keyword in settings.accept_keywords:
             if keyword.lower() in normalized_comment:
                 return ReviewDecision(approve=True, matched_keyword=keyword)
 
